@@ -260,13 +260,22 @@ def release_parking():
     
     # Show vehicles with parking from database
     cursor.execute("""
-        SELECT v.vehicle_id, v.owner_name, v.license_plate, v.vehicle_type,
-               v.lot_id, pl.lot_name, v.space_id, ps.space_type
-        FROM Vehicles v
-        JOIN Parking_Lots pl ON v.lot_id = pl.lot_id
-        JOIN Parking_Spaces ps ON v.space_id = ps.space_id
-        WHERE v.space_id IS NOT NULL
-        ORDER BY v.vehicle_id
+    SELECT 
+        v.vehicle_id,
+        v.owner_name,
+        v.license_plate,
+        v.vehicle_type,
+        v.lot_id,
+        (SELECT pl.lot_name 
+         FROM Parking_Lots pl 
+         WHERE pl.lot_id = v.lot_id) AS lot_name,
+        v.space_id,
+        (SELECT ps.space_type 
+         FROM Parking_Spaces ps 
+         WHERE ps.space_id = v.space_id) AS space_type
+    FROM Vehicles v
+    WHERE v.space_id IS NOT NULL
+    ORDER BY v.vehicle_id
     """)
     vehicles = cursor.fetchall()
     
@@ -485,6 +494,135 @@ def list_all_vehicles():
     print(f"\nShowing all {len(vehicles)} vehicles from database")
     press_enter()
 
+def delete_vehicle():
+    clear_screen()
+    print("=" * 60)
+    print("DELETE VEHICLE")
+    print("=" * 60)
+    
+    # Show all vehicles from database
+    cursor.execute("""
+        SELECT 
+            v.vehicle_id,
+            v.owner_name,
+            v.license_plate,
+            v.vehicle_type,
+            CASE WHEN v.space_id IS NOT NULL THEN 'Parked' ELSE 'Not Parked' END as status,
+            COALESCE(pl.lot_name, 'N/A') as lot_name,
+            COALESCE(v.space_id, 0) as space_id
+        FROM Vehicles v
+        LEFT JOIN Parking_Lots pl ON v.lot_id = pl.lot_id
+        ORDER BY v.vehicle_id
+    """)
+    
+    vehicles = cursor.fetchall()
+    
+    if not vehicles:
+        print("\nNo vehicles registered in the system!")
+        press_enter()
+        return
+    
+    print("\nREGISTERED VEHICLES:")
+    print("-" * 90)
+    print("{:<5} {:<20} {:<15} {:<12} {:<12} {:<18} {:<8}".format(
+        "ID", "Owner", "License", "Type", "Status", "Lot Name", "Space"
+    ))
+    print("-" * 90)
+    
+    for v in vehicles:
+        space_display = v[6] if v[6] != 0 else "-"
+        print("{:<5} {:<20} {:<15} {:<12} {:<12} {:<18} {:<8}".format(
+            v[0], v[1][:20], v[2], v[3], v[4], v[5][:18], space_display
+        ))
+    print("-" * 90)
+    
+    try:
+        vehicle_id = int(input("\nEnter Vehicle ID to delete (0 to cancel): "))
+        
+        if vehicle_id == 0:
+            print("\nOperation cancelled.")
+            press_enter()
+            return
+        
+        cursor.execute("""
+            SELECT 
+                v.owner_name, 
+                v.license_plate, 
+                v.vehicle_type,
+                v.space_id,
+                pl.lot_name
+            FROM Vehicles v
+            LEFT JOIN Parking_Lots pl ON v.lot_id = pl.lot_id
+            WHERE v.vehicle_id = %s
+        """, (vehicle_id,))
+        
+        result = cursor.fetchone()
+        
+        if not result:
+            print("\n Vehicle not found!")
+            press_enter()
+            return
+        
+        owner, license_plate, vehicle_type, space_id, lot_name = result
+        
+        print("\n" + "=" * 60)
+        print("VEHICLE DETAILS:")
+        print("=" * 60)
+        print(f"Vehicle ID      : {vehicle_id}")
+        print(f"Owner           : {owner}")
+        print(f"License Plate   : {license_plate}")
+        print(f"Vehicle Type    : {vehicle_type}")
+        print(f"Parking Status  : {'Parked at ' + str(lot_name) + ', Space ' + str(space_id) if space_id else 'Not Parked'}")
+        print("=" * 60)
+        
+        confirm = input("\nAre you sure you want to delete this vehicle? (yes/no): ").lower()
+        
+        if confirm != "yes":
+            print("\nDeletion cancelled.")
+            press_enter()
+            return
+        
+        cursor.execute("SELECT patient_id FROM Patients WHERE vehicle_id = %s", (vehicle_id,))
+        patient = cursor.fetchone()
+        
+        cursor.execute("SELECT staff_id FROM Hospital_Staff WHERE vehicle_id = %s", (vehicle_id,))
+        staff = cursor.fetchone()
+        if patient:
+            cursor.execute("UPDATE Patients SET vehicle_id = NULL WHERE vehicle_id = %s", (vehicle_id,))
+        
+        if staff:
+            cursor.execute("UPDATE Hospital_Staff SET vehicle_id = NULL WHERE vehicle_id = %s", (vehicle_id,))
+    
+        cursor.execute("DELETE FROM Vehicles WHERE vehicle_id = %s", (vehicle_id,))        
+        conn.commit()
+        
+        print("\n" + "=" * 60)
+        print("VEHICLE DELETED SUCCESSFULLY!")
+        print("=" * 60)
+        print(f"Vehicle ID      : {vehicle_id}")
+        print(f"Owner           : {owner}")
+        print(f"License Plate   : {license_plate}")
+        if space_id:
+            print(f"Parking Released: {lot_name}, Space {space_id}")
+            print("(Space automatically marked as 'Available' by trigger)")
+        if patient:
+            print(f"Unlinked from   : Patient ID {patient[0]}")
+        if staff:
+            print(f"Unlinked from   : Staff ID {staff[0]}")
+        print("=" * 60)
+        print("\nDELETE query executed successfully!")
+        
+    except ValueError:
+        print("\n Invalid input! Please enter a valid number.")
+    except mysql.connector.Error as db_err:
+        print(f"\n DATABASE ERROR: {db_err}")
+        conn.rollback()
+    except Exception as e:
+        print(f"\n ERROR: {e}")
+        conn.rollback()
+    
+    press_enter()
+
 # Main menu loop
 print("\n" + "=" * 60)
 print("     SMART HOSPITAL PARKING SYSTEM")
@@ -495,16 +633,17 @@ while True:
     print("\n" + "=" * 60)
     print("MAIN MENU")
     print("=" * 60)
-    print("1. Register Vehicle ")
+    print("1. Register Vehicle")
     print("2. Assign Parking Space")
     print("3. Release Parking Space")
     print("4. View Parking Availability")
     print("5. Generate Parking Report")
     print("6. List All Vehicles")
+    print("7. Delete Vehicle")  # NEW OPTION
     print("0. Exit")
     print("=" * 60)
     
-    choice = input("Enter your choice (0-6): ")
+    choice = input("Enter your choice (0-7): ")
     
     if choice == "1":
         register_vehicle()
@@ -518,6 +657,8 @@ while True:
         generate_report()
     elif choice == "6":
         list_all_vehicles()
+    elif choice == "7":
+        delete_vehicle() 
     elif choice == "0":
         print("\n" + "=" * 60)
         cursor.close()
@@ -526,5 +667,5 @@ while True:
         print("=" * 60)
         break
     else:
-        print("\nInvalid choice! Please enter a number between 0-6.")
+        print("\nInvalid choice! Please enter a number between 0-7.")
         press_enter()
