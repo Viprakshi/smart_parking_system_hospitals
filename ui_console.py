@@ -4,7 +4,7 @@ from datetime import datetime
 conn = mysql.connector.connect(
     host="localhost",
     user="root",
-    password="alphabetagamma@95822",  # Change this to your password
+    password="****************",  # Change this to your password
     database="smart_parking"
 )
 
@@ -668,4 +668,5 @@ while True:
         break
     else:
         print("\nInvalid choice! Please enter a number between 0-7.")
+
         press_enter()
